@@ -7,6 +7,7 @@ import {
   getClassification,
   validateTeam,
   calculateTeamMatchupScore,
+  autoBuildTeam,
   TYPE_ORDER,
 } from '@pokechess/engine';
 
@@ -191,9 +192,24 @@ export function TeamBuilder() {
           </label>
         </div>
 
-        <div className="matchup-info">
+        <div className="builder-actions-header">
+          <button
+            className="btn-auto-build"
+            onClick={() => {
+              const result = autoBuildTeam(team.primaryType, team.secondaryType);
+              if (result.team) {
+                updateTeam(activeTeam, result.team);
+                setStartErrors([]);
+              }
+              if (result.errors.length > 0) {
+                setStartErrors(result.errors);
+              }
+            }}
+          >
+            Auto Build
+          </button>
           <span className={`matchup-score ${matchupScore > 8 ? 'over-limit' : ''}`}>
-            Team Matchup Score: {matchupScore} / 8
+            Matchup Score: {matchupScore} / 8
           </span>
         </div>
       </div>

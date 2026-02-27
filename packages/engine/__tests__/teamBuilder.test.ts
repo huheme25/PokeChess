@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { validateTeam } from '../src/teamBuilder.js';
+import { validateTeam, autoBuildTeam } from '../src/teamBuilder.js';
 import { classifyAllPokemon, getPokemonForPool } from '../src/classifier.js';
+import { getPokemonById } from '@pokechess/data';
 import type { TeamConfig, PokemonType } from '@pokechess/data';
 
 describe('Classifier', () => {
@@ -143,5 +144,96 @@ describe('Team Builder Validation', () => {
     };
     const errors = validateTeam(team);
     expect(errors.some(e => e.code === 'TOO_MANY_LEGENDARIES')).toBe(true);
+  });
+});
+
+describe('autoBuildTeam', () => {
+  it('Genera equipo valido Water/Normal', () => {
+    const result = autoBuildTeam('Water', 'Normal');
+    expect(result.team).not.toBeNull();
+    expect(result.errors).toHaveLength(0);
+    if (result.team) {
+      expect(result.team.slots).toHaveLength(16);
+      const errors = validateTeam(result.team);
+      expect(errors).toHaveLength(0);
+    }
+  });
+
+  it('Respeta conteo de tipos minimos', () => {
+    const result = autoBuildTeam('Water', 'Poison');
+    expect(result.team).not.toBeNull();
+    if (result.team) {
+      const primaryCount = result.team.slots.filter(s => {
+        const p = getPokemonById(s.pokemonId);
+        return p && p.types.includes('Water');
+      }).length;
+      const secondaryCount = result.team.slots.filter(s => {
+        const p = getPokemonById(s.pokemonId);
+        return p && p.types.includes('Poison');
+      }).length;
+      expect(primaryCount).toBeGreaterThanOrEqual(10);
+      expect(secondaryCount).toBeGreaterThanOrEqual(6);
+    }
+  });
+
+  it('No tiene especies ni familias duplicadas', () => {
+    const result = autoBuildTeam('Normal', 'Poison');
+    expect(result.team).not.toBeNull();
+    if (result.team) {
+      const ids = result.team.slots.map(s => s.pokemonId);
+      expect(new Set(ids).size).toBe(16);
+      const families = result.team.slots.map(s => getPokemonById(s.pokemonId)!.evolutionFamilyId);
+      expect(new Set(families).size).toBe(16);
+    }
+  });
+
+  it('Composicion correcta de piezas', () => {
+    const result = autoBuildTeam('Poison', 'Ground');
+    expect(result.team).not.toBeNull();
+    if (result.team) {
+      const counts: Record<string, number> = {};
+      for (const s of result.team.slots) {
+        counts[s.pieceClass] = (counts[s.pieceClass] || 0) + 1;
+      }
+      expect(counts['Pawn']).toBe(8);
+      expect(counts['Knight']).toBe(2);
+      expect(counts['Bishop']).toBe(2);
+      expect(counts['Rook']).toBe(2);
+      expect(counts['Queen']).toBe(1);
+      expect(counts['King']).toBe(1);
+    }
+  });
+
+  it('Devuelve error para combo imposible (Dragon/Dragon)', () => {
+    const result = autoBuildTeam('Dragon', 'Dragon');
+    expect(result.team).toBeNull();
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it('Devuelve error para tipo primario con pocas familias', () => {
+    const result = autoBuildTeam('Fire', 'Normal');
+    expect(result.team).toBeNull();
+    expect(result.errors[0]).toContain('familias');
+  });
+
+  it('Mismo tipo primario y secundario funciona para tipos comunes', () => {
+    const result = autoBuildTeam('Water', 'Water');
+    expect(result.team).not.toBeNull();
+    if (result.team) {
+      const errors = validateTeam(result.team);
+      expect(errors).toHaveLength(0);
+    }
+  });
+
+  it('Max 1 legendario', () => {
+    const result = autoBuildTeam('Normal', 'Psychic');
+    expect(result.team).not.toBeNull();
+    if (result.team) {
+      const legendaryCount = result.team.slots.filter(s => {
+        const p = getPokemonById(s.pokemonId);
+        return p && p.isLegendary;
+      }).length;
+      expect(legendaryCount).toBeLessThanOrEqual(1);
+    }
   });
 });

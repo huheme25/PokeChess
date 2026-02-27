@@ -1,7 +1,7 @@
 import type { PokemonType, PieceClass, TeamSlot, TeamConfig } from '@pokechess/data';
 import { allPokemon, getPokemonById, getEvolutionFamily } from '@pokechess/data';
 import { getMatchupScore } from './typeChart.js';
-import { getClassification, getPokemonForPool } from './classifier.js';
+import { getClassification, getPokemonForPool, type ClassifiedPokemon } from './classifier.js';
 
 export interface ValidationError {
   code: string;
@@ -142,4 +142,244 @@ export function calculateTeamMatchupScore(
     }
   }
   return total;
+}
+
+// --- Auto Build ---
+
+export interface AutoBuildResult {
+  team: TeamConfig | null;
+  errors: string[];
+}
+
+const SLOT_REQUIREMENTS: { pieceClass: PieceClass; count: number }[] = [
+  { pieceClass: 'Queen',  count: 1 },
+  { pieceClass: 'King',   count: 1 },
+  { pieceClass: 'Rook',   count: 2 },
+  { pieceClass: 'Knight', count: 2 },
+  { pieceClass: 'Bishop', count: 2 },
+  { pieceClass: 'Pawn',   count: 8 },
+];
+
+/** Construye equipo automaticamente segun tipos primario y secundario */
+export function autoBuildTeam(
+  primaryType: PokemonType,
+  secondaryType: PokemonType,
+): AutoBuildResult {
+  const sameType = primaryType === secondaryType;
+  // Pre-check: suficientes familias para cumplir los minimos de tipo?
+  const eligible = allPokemon.filter(p =>
+    p.types.includes(primaryType) || p.types.includes(secondaryType),
+  );
+  const uniqueFamilies = new Set(eligible.map(p => p.evolutionFamilyId));
+  if (uniqueFamilies.size < 16) {
+    return {
+      team: null,
+      errors: [`No hay suficientes Pokemon de tipo ${primaryType}/${secondaryType} (${uniqueFamilies.size} familias, se necesitan 16)`],
+    };
+  }
+
+  // Verificar que hay suficientes familias por tipo para los minimos
+  const primaryFamilies = new Set(allPokemon.filter(p => p.types.includes(primaryType)).map(p => p.evolutionFamilyId));
+  const secondaryFamilies = new Set(allPokemon.filter(p => p.types.includes(secondaryType)).map(p => p.evolutionFamilyId));
+  if (primaryFamilies.size < 10) {
+    return {
+      team: null,
+      errors: [`${primaryType} solo tiene ${primaryFamilies.size} familias, se necesitan ≥10 para tipo primario`],
+    };
+  }
+  if (secondaryFamilies.size < 6) {
+    return {
+      team: null,
+      errors: [`${secondaryType} solo tiene ${secondaryFamilies.size} familias, se necesitan ≥6 para tipo secundario`],
+    };
+  }
+
+  const usedIds = new Set<number>();
+  const usedFamilies = new Set<number>();
+  let usedLegendary = false;
+  let primaryCount = 0;
+  let secondaryCount = 0;
+  const slots: TeamSlot[] = [];
+  let slotsRemaining = 16;
+
+  for (const { pieceClass, count } of SLOT_REQUIREMENTS) {
+    const pool = getPokemonForPool(pieceClass);
+    let picked = 0;
+
+    // Seleccionar uno a uno, actualizando tracking entre picks
+    while (picked < count) {
+      // Filtrar candidatos disponibles (re-evalua en cada pick)
+      const available = pool.filter(c => {
+        if (usedIds.has(c.pokemon.id)) return false;
+        if (usedFamilies.has(c.pokemon.evolutionFamilyId)) return false;
+        if (c.pokemon.isLegendary) {
+          if (usedLegendary) return false;
+          if (c.pokemon.id !== 150 && c.pokemon.id !== 151) return false;
+        }
+        return true;
+      });
+
+      // Separar tipados y no tipados
+      const typed = available.filter(c => c.pokemon.types.includes(primaryType) || c.pokemon.types.includes(secondaryType));
+      const untyped = available.filter(c => !c.pokemon.types.includes(primaryType) && !c.pokemon.types.includes(secondaryType));
+
+      // Ordenar tipados por prioridad normalizada, untyped como fallback
+      const sorted = sortCandidates(typed, primaryType, secondaryType, primaryCount, secondaryCount, primaryFamilies.size, secondaryFamilies.size);
+      const untypedSorted = [...untyped].sort((a, b) => b.pr - a.pr);
+      const candidates = [...sorted, ...untypedSorted];
+
+      if (candidates.length === 0) {
+        return {
+          team: null,
+          errors: [`No hay suficientes Pokemon legales para ${pieceClass} (necesita ${count}, tiene ${picked})`],
+        };
+      }
+
+      const pick = candidates[0];
+      slots.push({ pokemonId: pick.pokemon.id, pieceClass });
+      usedIds.add(pick.pokemon.id);
+      usedFamilies.add(pick.pokemon.evolutionFamilyId);
+      if (pick.pokemon.isLegendary) usedLegendary = true;
+      if (pick.pokemon.types.includes(primaryType)) primaryCount++;
+      if (pick.pokemon.types.includes(secondaryType)) secondaryCount++;
+      slotsRemaining--;
+      picked++;
+    }
+  }
+
+  // Swap pass: si faltan tipos minimos, intentar intercambiar Pawns
+  if (primaryCount < 10 || secondaryCount < 6) {
+    swapForTypeBalance(slots, primaryType, secondaryType, primaryCount, secondaryCount, usedIds, usedFamilies);
+  }
+
+  const team: TeamConfig = { primaryType, secondaryType, slots };
+
+  // Validar resultado
+  const errors = validateTeam(team);
+  if (errors.length > 0) {
+    return { team: null, errors: errors.map(e => e.message) };
+  }
+
+  return { team, errors: [] };
+}
+
+function sortCandidates(
+  candidates: ClassifiedPokemon[],
+  primaryType: PokemonType,
+  secondaryType: PokemonType,
+  primaryCount: number,
+  secondaryCount: number,
+  primaryFamilyCount: number,
+  secondaryFamilyCount: number,
+): ClassifiedPokemon[] {
+  // Normalizar deficits por disponibilidad: tipos escasos obtienen prioridad
+  const primaryDeficit = Math.max(0, 10 - primaryCount) / Math.max(1, primaryFamilyCount);
+  const secondaryDeficit = Math.max(0, 6 - secondaryCount) / Math.max(1, secondaryFamilyCount);
+
+  return [...candidates].sort((a, b) => {
+    const aHasPri = a.pokemon.types.includes(primaryType);
+    const aHasSec = a.pokemon.types.includes(secondaryType);
+    const bHasPri = b.pokemon.types.includes(primaryType);
+    const bHasSec = b.pokemon.types.includes(secondaryType);
+    const aHasBoth = aHasPri && aHasSec;
+    const bHasBoth = bHasPri && bHasSec;
+
+    // Tier 1: ambos tipos primero
+    if (aHasBoth !== bHasBoth) return aHasBoth ? -1 : 1;
+
+    // Tier 2: tipo con mas deficit normalizado
+    const aScore = (aHasPri ? primaryDeficit : 0) + (aHasSec ? secondaryDeficit : 0);
+    const bScore = (bHasPri ? primaryDeficit : 0) + (bHasSec ? secondaryDeficit : 0);
+    if (aScore !== bScore) return bScore - aScore;
+
+    // Desempate: mayor PR
+    return b.pr - a.pr;
+  });
+}
+
+function swapForTypeBalance(
+  slots: TeamSlot[],
+  primaryType: PokemonType,
+  secondaryType: PokemonType,
+  primaryCount: number,
+  secondaryCount: number,
+  usedIds: Set<number>,
+  usedFamilies: Set<number>,
+): void {
+  // Intentar swaps en todas las clases, priorizando Pawns (mas flexibles)
+  const classOrder: PieceClass[] = ['Pawn', 'Bishop', 'Knight', 'Rook', 'King', 'Queen'];
+
+  for (const targetClass of classOrder) {
+    if (primaryCount >= 10 && secondaryCount >= 6) break;
+
+    const classIndices = slots
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.pieceClass === targetClass)
+      .map(({ i }) => i);
+
+    const pool = getPokemonForPool(targetClass);
+
+    for (const idx of classIndices) {
+      if (primaryCount >= 10 && secondaryCount >= 6) break;
+
+      const current = getPokemonById(slots[idx].pokemonId);
+      if (!current) continue;
+
+      const curHasPri = current.types.includes(primaryType);
+      const curHasSec = current.types.includes(secondaryType);
+
+      // Solo intentar swap si este slot NO contribuye a un tipo que necesitamos
+      const needPrimary = primaryCount < 10 && !curHasPri;
+      const needSecondary = secondaryCount < 6 && !curHasSec;
+      if (!needPrimary && !needSecondary) continue;
+
+      // Buscar mejor reemplazo que mejore el deficit neto
+      let bestReplacement: ClassifiedPokemon | null = null;
+      let bestGain = 0;
+
+      for (const c of pool) {
+        if (c.pokemon.id === current.id) continue;
+        if (usedIds.has(c.pokemon.id)) continue;
+        if (usedFamilies.has(c.pokemon.evolutionFamilyId)) continue;
+        if (c.pokemon.isLegendary) continue;
+
+        const repHasPri = c.pokemon.types.includes(primaryType);
+        const repHasSec = c.pokemon.types.includes(secondaryType);
+        if (!repHasPri && !repHasSec) continue;
+
+        // Calcular ganancia neta: que tanto mejoran los deficits
+        const priDelta = (repHasPri ? 1 : 0) - (curHasPri ? 1 : 0);
+        const secDelta = (repHasSec ? 1 : 0) - (curHasSec ? 1 : 0);
+
+        // No empeorar un tipo que ya esta en minimo
+        const newPriCount = primaryCount + priDelta;
+        const newSecCount = secondaryCount + secDelta;
+        if (newPriCount < Math.min(primaryCount, 10) && primaryCount <= 10) continue;
+        if (newSecCount < Math.min(secondaryCount, 6) && secondaryCount <= 6) continue;
+
+        // Ganancia ponderada: priorizar el tipo con mas deficit
+        const priGain = Math.max(0, priDelta) * (primaryCount < 10 ? 2 : 0);
+        const secGain = Math.max(0, secDelta) * (secondaryCount < 6 ? 2 : 0);
+        const gain = priGain + secGain;
+
+        if (gain > bestGain) {
+          bestGain = gain;
+          bestReplacement = c;
+        }
+      }
+
+      if (bestReplacement) {
+        usedIds.delete(current.id);
+        usedFamilies.delete(current.evolutionFamilyId);
+        if (curHasPri) primaryCount--;
+        if (curHasSec) secondaryCount--;
+
+        slots[idx] = { pokemonId: bestReplacement.pokemon.id, pieceClass: targetClass };
+        usedIds.add(bestReplacement.pokemon.id);
+        usedFamilies.add(bestReplacement.pokemon.evolutionFamilyId);
+        if (bestReplacement.pokemon.types.includes(primaryType)) primaryCount++;
+        if (bestReplacement.pokemon.types.includes(secondaryType)) secondaryCount++;
+      }
+    }
+  }
 }

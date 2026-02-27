@@ -20,8 +20,8 @@ export { classifyAllPokemon, getClassification, getPokemonForPool, clearCache } 
 export type { ClassifiedPokemon } from './classifier.js';
 
 // Team Builder
-export { validateTeam, isPokemonLegalForClass, calculateTeamMatchupScore } from './teamBuilder.js';
-export type { ValidationError } from './teamBuilder.js';
+export { validateTeam, isPokemonLegalForClass, calculateTeamMatchupScore, autoBuildTeam } from './teamBuilder.js';
+export type { ValidationError, AutoBuildResult } from './teamBuilder.js';
 
 // Game
 export { createGame, makeMove, resolvePendingCombat, createGamePiece, setupBoard } from './game.js';
