@@ -98,7 +98,7 @@ describe('Combat', () => {
 
     it('Mewtwo King tiene -1 D permanente', () => {
       const stats = getStatsWithEvolution('King', 0, 0, 'defense', true);
-      expect(stats.defense).toBe(3); // 4 - 1
+      expect(stats.defense).toBe(2); // 3 - 1
     });
   });
 });

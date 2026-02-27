@@ -15,7 +15,7 @@ export const BASE_STATS: Record<PieceClass, PieceStats> = {
   Bishop: { hp: 41, die: 6,  attack: 1, defense: 3 },
   Rook:   { hp: 46, die: 6,  attack: 1, defense: 3 },
   Queen:  { hp: 51, die: 6,  attack: 1, defense: 3 },
-  King:   { hp: 46, die: 6,  attack: 1, defense: 4 },
+  King:   { hp: 36, die: 6,  attack: 1, defense: 3 },
 };
 
 const DIE_PROGRESSION = [6, 8, 10, 12];
