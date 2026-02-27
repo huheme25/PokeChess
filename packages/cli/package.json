@@ -1,0 +1,18 @@
+{
+  "name": "@pokechess/cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "balance:report": "tsx src/balanceReport.ts",
+    "balance:tune": "tsx src/balanceTuner.ts"
+  },
+  "dependencies": {
+    "@pokechess/engine": "workspace:*",
+    "@pokechess/data": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.0"
+  }
+}

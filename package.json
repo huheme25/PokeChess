@@ -1,0 +1,22 @@
+{
+  "name": "pokechess-151",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @pokechess/web dev",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "balance:report": "pnpm --filter @pokechess/cli balance:report",
+    "balance:tune": "pnpm --filter @pokechess/cli balance:tune"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
